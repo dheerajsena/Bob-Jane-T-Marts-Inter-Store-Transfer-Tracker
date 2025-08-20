@@ -336,27 +336,32 @@ def edit_selected_rows(df: pd.DataFrame, user_email: str):
 
 
 def kpi_bar(df: pd.DataFrame):
-    # compute "this week" as Monday -> today
-    today = date.today()
-    start_of_week = today - timedelta(days=today.weekday())
+    """KPI tiles at top of Tracker."""
+    # Week window: Monday -> today (inclusive)
+    today = pd.Timestamp(date.today())
+    start_of_week = today - pd.Timedelta(days=today.dayofweek)
 
-    def to_date(s):
-        try:
-            return pd.to_datetime(s).date()
-        except Exception:
-            return None
+    # Vectorized datetime conversion
+    req_dates = pd.to_datetime(df.get("Date of eComm Request"), errors="coerce")
+    fin_dates = pd.to_datetime(df.get("Date Finance Updated"), errors="coerce")
 
-    completed = df[(df["Status"] == "Completed") & (df["Date Finance Updated"].apply(to_date).apply(lambda d: d is not None and start_of_week <= d <= today))]
-    new_this_week = df[df["Date of eComm Request"].apply(to_date).apply(lambda d: d is not None and start_of_week <= d <= today)]
-    open_now = df[(df["Status"].isin(["Flagged", "In-Progress"])) & (~df["Archived"])]
-    archived = df[df["Archived"]]
+    # Masks
+    completed_mask = (df["Status"] == "Completed") & fin_dates.between(start_of_week, today, inclusive="both")
+    new_mask = req_dates.between(start_of_week, today, inclusive="both")
+    open_mask = df["Status"].isin(["Flagged", "In-Progress"]) & (~df["Archived"].fillna(False))
+    archived_mask = df["Archived"].fillna(False)
+
+    # KPI values
+    completed = df[completed_mask]
+    new_this_week = df[new_mask]
+    open_now = df[open_mask]
+    archived = df[archived_mask]
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Completed this week", len(completed))
-    c2.metric("New this week", len(new_this_week))
-    c3.metric("Open now", len(open_now))
-    c4.metric("Archived", len(archived))
-
+    c1.metric("Completed this week", int(len(completed)))
+    c2.metric("New this week", int(len(new_this_week)))
+    c3.metric("Open now", int(len(open_now)))
+    c4.metric("Archived", int(len(archived)))
 
 def analytics_section(df: pd.DataFrame):
     st.subheader("📊 Analytics")
