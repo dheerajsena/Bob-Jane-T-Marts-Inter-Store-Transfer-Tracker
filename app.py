@@ -127,7 +127,6 @@ def authenticate():
 # Helpers
 # --------------------------
 def render_header():
-    st.set_page_config(page_title=APP_TITLE, page_icon="📦", layout="wide")
     st.title(APP_TITLE)
     st.caption("Centralised view of eComm inter-store transfer requests for Accounts & E-Commerce teams.")
 
