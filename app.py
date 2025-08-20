@@ -6,12 +6,19 @@ from email.mime.text import MIMEText
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
-from utils.storage import load_tracker, save_tracker, push_tracker_to_github, load_config, save_config
+from utils.storage import (
+    load_tracker,
+    save_tracker,
+    push_tracker_to_github,
+    load_config,
+    save_config,
+)
 
 APP_TITLE = "Bob Jane T-Marts — Inter-Store Transfer Tracker"
 STATUS_OPTIONS = ["Flagged", "In-Progress", "Completed"]
 AMOUNT_TYPE_OPTIONS = ["To be Paid", "Refunded", "Partially Refunded"]
 REQUESTED_BY_OPTIONS = ["eComm", "Accounts", "Store", "Other"]
+
 
 # --------------------------
 # Email helpers (SMTP via secrets)
@@ -21,6 +28,7 @@ def email_configured():
     required = ["SMTP_SERVER", "SMTP_USER", "SMTP_PASSWORD", "FROM_EMAIL", "ACCOUNTS_TO"]
     missing = [k for k in required if k not in secrets or not secrets.get(k)]
     return len(missing) == 0, missing
+
 
 def send_email(subject: str, body: str, to_override: str = "") -> tuple[bool, str]:
     ok, missing = email_configured()
@@ -52,10 +60,9 @@ def send_email(subject: str, body: str, to_override: str = "") -> tuple[bool, st
     except Exception as e:
         return False, f"SMTP error: {e}"
 
+
 def build_email_template(template: str, amount: str, store: str, reason: str, order_no: str, greeting: str) -> tuple[str, str]:
-    # Subject
     subject = "Collect Money from the Store | Credit Note"
-    # Body from scenarios
     if template == "Scenario 2":
         body = f"""{greeting}
 
@@ -83,7 +90,7 @@ Collect Money from the Store | Credit Note
 Can you please create a credit note of {amount} from {store}
 Reason: {reason}
 """
-    else:
+    else:  # Standard / Scenario 1 style
         body = f"""{greeting}
 
 Collect Money from the Store | Credit Note
@@ -92,6 +99,7 @@ Can you please create a credit note of {amount} from {store}
 Reason: {reason} Order #{order_no}
 """
     return subject, body.strip()
+
 
 # --------------------------
 # Authentication
@@ -114,14 +122,20 @@ def authenticate():
     configured_pwd = st.secrets.get("app_password", None)
     allowed_users = st.secrets.get("allowed_users", [])
 
+    # Accept a list or a comma-separated string for allowed_users
+    if isinstance(allowed_users, str):
+        allowed_users = [e.strip() for e in allowed_users.split(",") if e.strip()]
+    allowed_users_norm = [e.lower().strip() for e in allowed_users]
+
     if st.sidebar.button("Sign in"):
-        if configured_pwd and pwd == configured_pwd and (not allowed_users or user in allowed_users):
+        if configured_pwd and (pwd == configured_pwd) and (not allowed_users_norm or (user or "").lower().strip() in allowed_users_norm):
             st.session_state.auth_ok = True
             st.session_state.user_email = user
             st.rerun()
         else:
             st.sidebar.error("Invalid credentials.")
     st.stop()
+
 
 # --------------------------
 # Helpers
@@ -130,25 +144,28 @@ def render_header():
     st.title(APP_TITLE)
     st.caption("Centralised view of eComm inter-store transfer requests for Accounts & E-Commerce teams.")
 
+
 def load_data():
-   def load_data():
     df = load_tracker()
 
-    # --- Coerce types for editor compatibility ---
-    # Dates: to datetime.date (NaT allowed)
+    # Coerce date columns to datetime.date (so DateColumn works)
     for dc in ["Date of eComm Request", "Date Finance Updated"]:
-        df[dc] = pd.to_datetime(df[dc], errors="coerce").dt.date
+        if dc in df.columns:
+            df[dc] = pd.to_datetime(df[dc], errors="coerce").dt.date
 
-    # Archived: to bool (accepts strings like "true/false", "1/0", "yes/no")
-    df["Archived"] = (
-        df["Archived"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .isin(["true", "1", "yes", "y"])
-    )
+    # Coerce Archived to bool
+    if "Archived" in df.columns:
+        df["Archived"] = (
+            df["Archived"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(["true", "1", "yes", "y"])
+        )
+    else:
+        df["Archived"] = False
 
-    # Ensure other fields are plain strings (avoids pandas categories etc.)
+    # Ensure remaining fields are plain strings
     for col in [
         "Order Number", "In-Correct", "Store - Fitment Completed", "Status",
         "Amount", "Amount Type", "Requested By", "Reason",
@@ -163,7 +180,7 @@ def load_data():
 
 def filters_ui(df: pd.DataFrame):
     with st.expander("🔎 Filters", expanded=True):
-        c1, c2, c3, c4 = st.columns([1,1,1,1])
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
         with c1:
             status = st.multiselect("Status", STATUS_OPTIONS, help="Filter by progress state.")
         with c2:
@@ -172,13 +189,13 @@ def filters_ui(df: pd.DataFrame):
             store_fitment = st.text_input("Fitment Completed Store contains", help="Filter by part of a store name or ID.")
         with c4:
             date_range = st.date_input("eComm Request date range", value=(), help="Filter by request date.")
-        c5, c6 = st.columns([1,1])
+        c5, c6 = st.columns([1, 1])
         with c5:
             show_archived = st.checkbox("Show archived", value=False, help="Include soft-deleted records")
         with c6:
             q = st.text_input("Search all text", placeholder="Order number, store, reason, etc.")
 
-    mask = pd.Series([True]*len(df))
+    mask = pd.Series([True] * len(df))
     if not show_archived:
         mask &= ~df["Archived"].fillna(False)
     if status:
@@ -203,10 +220,11 @@ def filters_ui(df: pd.DataFrame):
 
     return df[mask].copy()
 
+
 def new_entry_form(user_email: str):
     with st.form("new_entry"):
         st.subheader("➕ Log a new transfer request")
-        c1, c2, c3, c4 = st.columns([1,1,1,1])
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
         with c1:
             req_date = st.date_input("Date of eComm Request", value=date.today(), help="When the eCommerce team raised the request.")
         with c2:
@@ -216,7 +234,7 @@ def new_entry_form(user_email: str):
         with c4:
             requested_by = st.selectbox("Requested By", REQUESTED_BY_OPTIONS, index=0, help="Who logged or requested this.")
 
-        c5, c6, c7, c8 = st.columns([1,1,1,1])
+        c5, c6, c7, c8 = st.columns([1, 1, 1, 1])
         with c5:
             incorrect_store = st.text_input("In-Correct", placeholder="Store ID or name", help="The store originally assigned incorrectly.")
         with c6:
@@ -226,7 +244,7 @@ def new_entry_form(user_email: str):
         with c8:
             amount_type = st.selectbox("Amount Type", [""] + AMOUNT_TYPE_OPTIONS, index=0, help="Leave blank if N/A.")
 
-        c9, c10 = st.columns([1,1])
+        c9, c10 = st.columns([1, 1])
         with c9:
             finance_date = st.date_input("Date Finance Updated", value=None, help="Leave blank if not applicable or unknown.", format="YYYY-MM-DD")
         with c10:
@@ -234,7 +252,7 @@ def new_entry_form(user_email: str):
 
         # Email & Reason
         st.markdown("**Reason & Email Template (optional):**")
-        t1, t2, t3, t4 = st.columns([1,1,1,1])
+        t1, t2, t3, t4 = st.columns([1, 1, 1, 1])
         with t1:
             template = st.selectbox("Template", ["Standard", "Scenario 2", "Scenario 3", "Scenario 4"], help="Choose the email wording style.")
         with t2:
@@ -244,7 +262,14 @@ def new_entry_form(user_email: str):
         with t4:
             override_to = st.text_input("To (override)", placeholder="leave blank to use ACCOUNTS_TO secrets")
 
-        subject_preview, body_preview = build_email_template(template, amount or "<amount>", (fitment_store or incorrect_store or "<store>"), reason or "<reason>", order_num or "<order>", greeting or "Hi Accounts Team,")
+        subject_preview, body_preview = build_email_template(
+            template,
+            amount or "<amount>",
+            (fitment_store or incorrect_store or "<store>"),
+            reason or "<reason>",
+            order_num or "<order>",
+            greeting or "Hi Accounts Team,",
+        )
         with st.expander("📧 Email Preview"):
             st.code(f"Subject: {subject_preview}\n\n{body_preview}", language="text")
 
@@ -270,11 +295,12 @@ def new_entry_form(user_email: str):
                 "Email Sent At": "",
                 "Archived": False,
                 "Last Modified By": user_email,
-                "Last Modified At": datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                "Last Modified At": datetime.utcnow().isoformat(timespec="seconds") + "Z",
             }
             send_flag = (requested_by == "eComm") and auto_email
             return new_row, send_flag, subject_preview, (override_to or "")
     return None, False, "", ""
+
 
 def edit_selected_rows(df: pd.DataFrame, user_email: str):
     st.subheader("✏️ Edit selected rows")
@@ -308,10 +334,12 @@ def edit_selected_rows(df: pd.DataFrame, user_email: str):
         return ed
     return df
 
+
 def kpi_bar(df: pd.DataFrame):
     # compute "this week" as Monday -> today
     today = date.today()
     start_of_week = today - timedelta(days=today.weekday())
+
     def to_date(s):
         try:
             return pd.to_datetime(s).date()
@@ -328,6 +356,7 @@ def kpi_bar(df: pd.DataFrame):
     c2.metric("New this week", len(new_this_week))
     c3.metric("Open now", len(open_now))
     c4.metric("Archived", len(archived))
+
 
 def analytics_section(df: pd.DataFrame):
     st.subheader("📊 Analytics")
@@ -365,7 +394,6 @@ def analytics_section(df: pd.DataFrame):
             st.info("No fitment store data yet.")
 
     with c4:
-        # Status distribution for quick glance
         st.markdown("**Status Distribution**")
         status_counts = df["Status"].value_counts()
         if not status_counts.empty:
@@ -373,22 +401,27 @@ def analytics_section(df: pd.DataFrame):
         else:
             st.info("No status data yet.")
 
+
 def main():
+    # Call set_page_config once, before any other st.* call
     st.set_page_config(page_title=APP_TITLE, page_icon="📦", layout="wide")
     render_header()
     authenticate()
 
     user_email = st.session_state.get("user_email", "unknown@internal")
 
-    tabs = st.tabs([
-        "📋 Tracker",
-        "➕ New Entry",
-        "📧 Email Tools",
-        "📊 Analytics",
-        "⚙️ Admin / Export",
-        "❓ Help"
-    ])
+    tabs = st.tabs(
+        [
+            "📋 Tracker",
+            "➕ New Entry",
+            "📧 Email Tools",
+            "📊 Analytics",
+            "⚙️ Admin / Export",
+            "❓ Help",
+        ]
+    )
 
+    # Tracker
     with tabs[0]:
         df = load_data()
         kpi_bar(df)
@@ -415,7 +448,7 @@ def main():
                 "Last Modified By": st.column_config.TextColumn(help="Last editor."),
                 "Last Modified At": st.column_config.TextColumn(help="UTC timestamp of last change."),
             },
-            hide_index=True
+            hide_index=True,
         )
 
         st.divider()
@@ -425,17 +458,25 @@ def main():
         if len(updated) != len(df):
             save_tracker(updated)
 
+    # New Entry
     with tabs[1]:
         new, send_flag, subj, to_override = new_entry_form(user_email)
         if new:
             df = load_data()
             cfg = load_config()
             dupe_mode = cfg.get("duplicate_check", "pair")
+
+            # Normalise order number for comparison
+            norm_order = (new["Order Number"] or "").strip().casefold()
+            order_match = df["Order Number"].astype(str).str.strip().str.casefold().eq(norm_order)
+
             if dupe_mode == "order_only":
-                dup_exists = df["Order Number"].astype(str).str.strip().eq(new["Order Number"]).any()
+                dup_exists = order_match.any()
             else:
-                key_cols = ["Order Number", "Date of eComm Request"]
-                dup_exists = ((df[key_cols] == pd.Series({k:new[k] for k in key_cols})).all(axis=1)).any()
+                new_req_date = pd.to_datetime(new["Date of eComm Request"], errors="coerce").date()
+                date_match = df["Date of eComm Request"] == new_req_date
+                dup_exists = (order_match & date_match).any()
+
             if dup_exists:
                 st.warning("Duplicate detected based on current settings.")
             else:
@@ -450,6 +491,7 @@ def main():
                 save_tracker(df)
                 st.success("Added new request.")
 
+    # Email Tools
     with tabs[2]:
         st.subheader("Email Tools")
         st.caption("Generate or send emails for existing entries.")
@@ -463,7 +505,7 @@ def main():
             st.markdown("**Completion Email (Accounts → eCommerce)**")
             complete_subject = f"Completed: Inter-Store Transfer for Order {row.get('Order Number','')}"
             amount_line = f"{row.get('Amount','')}"
-            if row.get("Amount Type",""):
+            if row.get("Amount Type", ""):
                 amount_line += f" ({row.get('Amount Type','')})"
             complete_body = f"""Hi Dheeraj,
 
@@ -491,18 +533,31 @@ Accounts Team
                 else:
                     st.info(msg)
 
+    # Analytics
     with tabs[3]:
         df = load_data()
         analytics_section(df)
 
+    # Admin / Export
     with tabs[4]:
         st.subheader("Admin / Export")
         df = load_data()
-        st.download_button("⬇️ Download CSV", data=df.to_csv(index=False), file_name="orders_tracker.csv", mime="text/csv", use_container_width=True)
+        st.download_button(
+            "⬇️ Download CSV",
+            data=df.to_csv(index=False),
+            file_name="orders_tracker.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
         st.markdown("**Duplicate detection**")
         cfg = load_config()
-        mode = st.radio("Choose duplicate detection mode", options=["Order + Date of Request (pair)", "Order Number only"], index=0 if cfg.get("duplicate_check","pair")=="pair" else 1, horizontal=True)
+        mode = st.radio(
+            "Choose duplicate detection mode",
+            options=["Order + Date of Request (pair)", "Order Number only"],
+            index=0 if cfg.get("duplicate_check", "pair") == "pair" else 1,
+            horizontal=True,
+        )
         if st.button("Save duplicate detection setting"):
             cfg["duplicate_check"] = "order_only" if "only" in mode else "pair"
             save_config(cfg)
@@ -515,15 +570,19 @@ Accounts Team
             else:
                 st.info(msg)
 
-        st.markdown("""
+        st.markdown(
+            """
 **Environment variables / secrets:**  
 - `GITHUB_OWNER_REPO`, `GITHUB_TOKEN`, `GITHUB_TARGET_PATH`, `GITHUB_TARGET_BRANCH`, `TRACKER_CSV_PATH`, `TRACKER_CONFIG_PATH`  
 - **Email (SMTP)**: `SMTP_SERVER`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASSWORD`, `FROM_EMAIL`, `ACCOUNTS_TO`, optional `ACCOUNTS_CC`, optional `ECOMMERCE_TO`
-        """)
+            """
+        )
 
+    # Help
     with tabs[5]:
         st.subheader("How to use")
-        st.markdown("""
+        st.markdown(
+            """
 - Use **New Entry** to log a new transfer request. Only **Order Number** is mandatory; other fields can be blank if not applicable.  
 - **Tracker** shows KPIs, filters (including **Show archived**), and the main list.  
 - **Inline Edit Mode** lets you update statuses, reasons, and toggle **Archived** (soft-delete).  
@@ -531,7 +590,9 @@ Accounts Team
 - **Email Tools** tab lets Accounts generate a **completion email** to Dheeraj when finishing a request.
 - **Analytics** shows top reasons and store counts for both In-Correct and Fitment Completed.
 - **Admin / Export:** download the CSV, push to GitHub, and set **Duplicate detection** to either *Order + Date* or *Order only*.
-        """)
+            """
+        )
+
 
 if __name__ == "__main__":
     main()
