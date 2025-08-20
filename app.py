@@ -341,9 +341,9 @@ def kpi_bar(df: pd.DataFrame):
     today = pd.Timestamp(date.today())
     start_of_week = today - pd.Timedelta(days=today.dayofweek)
 
-    # Vectorized datetime conversion
-    req_dates = pd.to_datetime(df.get("Date of eComm Request"), errors="coerce")
-    fin_dates = pd.to_datetime(df.get("Date Finance Updated"), errors="coerce")
+    # Vectorized datetime conversion (NaT-safe)
+    req_dates = pd.to_datetime(df["Date of eComm Request"], errors="coerce")
+    fin_dates = pd.to_datetime(df["Date Finance Updated"], errors="coerce")
 
     # Masks
     completed_mask = (df["Status"] == "Completed") & fin_dates.between(start_of_week, today, inclusive="both")
@@ -352,16 +352,11 @@ def kpi_bar(df: pd.DataFrame):
     archived_mask = df["Archived"].fillna(False)
 
     # KPI values
-    completed = df[completed_mask]
-    new_this_week = df[new_mask]
-    open_now = df[open_mask]
-    archived = df[archived_mask]
-
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Completed this week", int(len(completed)))
-    c2.metric("New this week", int(len(new_this_week)))
-    c3.metric("Open now", int(len(open_now)))
-    c4.metric("Archived", int(len(archived)))
+    c1.metric("Completed this week", int(completed_mask.sum()))
+    c2.metric("New this week", int(new_mask.sum()))
+    c3.metric("Open now", int(open_mask.sum()))
+    c4.metric("Archived", int(archived_mask.sum()))
 
 def analytics_section(df: pd.DataFrame):
     st.subheader("📊 Analytics")
