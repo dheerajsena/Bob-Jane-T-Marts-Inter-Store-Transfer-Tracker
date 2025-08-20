@@ -131,10 +131,35 @@ def render_header():
     st.caption("Centralised view of eComm inter-store transfer requests for Accounts & E-Commerce teams.")
 
 def load_data():
+   def load_data():
     df = load_tracker()
-    # Convert Archived to bool for UI
-    df["Archived"] = df["Archived"].astype(str).str.strip().str.lower().isin(["true","1","yes","y"])
+
+    # --- Coerce types for editor compatibility ---
+    # Dates: to datetime.date (NaT allowed)
+    for dc in ["Date of eComm Request", "Date Finance Updated"]:
+        df[dc] = pd.to_datetime(df[dc], errors="coerce").dt.date
+
+    # Archived: to bool (accepts strings like "true/false", "1/0", "yes/no")
+    df["Archived"] = (
+        df["Archived"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin(["true", "1", "yes", "y"])
+    )
+
+    # Ensure other fields are plain strings (avoids pandas categories etc.)
+    for col in [
+        "Order Number", "In-Correct", "Store - Fitment Completed", "Status",
+        "Amount", "Amount Type", "Requested By", "Reason",
+        "Email Subject", "Email Body", "Email Sent At",
+        "Last Modified By", "Last Modified At",
+    ]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).fillna("")
+
     return df
+
 
 def filters_ui(df: pd.DataFrame):
     with st.expander("🔎 Filters", expanded=True):
